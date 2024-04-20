@@ -1,159 +1,128 @@
-def serverIP = 'soe data'
 pipeline {
   agent any
-
-  environment {
-    registry = "hossamalsankary/nodejs_app"
-    registryCredential = 'docker_credentials'
-    ANSIBLE_PRIVATE_KEY = credentials('secritfile')
-  }
-
   stages {
-    stage("install dependencies") {
-
-      steps {
-        dir("node-app") {
-
-          sh 'npm install'
-        }
-      }
+    stage('install dependencies') {
       post {
         always {
           sh 'bash ./bash-scripts/clearDockerImages.sh'
         }
 
       }
+      steps {
+        dir(path: 'node-app') {
+          sh 'npm install'
+        }
 
+      }
     }
 
-    stage(" Build and Test") {
+    stage(' Build and Test') {
       parallel {
-        stage("Test") {
-
+        stage('Test') {
           steps {
-
-            dir("node-app") {
-
+            dir(path: 'node-app') {
               sh 'npm run  test:unit'
             }
 
           }
-
         }
-        stage("Build") {
 
+        stage('Build') {
           steps {
-            dir("node-app") {
+            dir(path: 'node-app') {
               sh 'npm run build'
-
             }
-          }
 
+          }
         }
+
       }
     }
 
-    stage("Build Docker Image") {
-      steps {
+    stage('Build Docker Image') {
+      post {
+        failure {
+          sh 'bash ./bash-scripts/clearDockerImages.sh'
+        }
 
+      }
+      steps {
         script {
           dir("node-app") {
 
             dockerImage = docker.build registry + ":$BUILD_NUMBER"
           }
         }
-      }
-      post {
 
-        failure {
-          sh 'bash ./bash-scripts/clearDockerImages.sh'
-        }
       }
     }
 
-    stage("push image to docker hup") {
+    stage('push image to docker hup') {
       steps {
         script {
           docker.withRegistry('', registryCredential) {
             dockerImage.push()
           }
         }
+
       }
     }
 
-    stage("Update K8s Green deployment with new image ") {
+    stage('Update K8s Green deployment with new image ') {
       steps {
-
-     sh """
-        sed -i 's|DOCKER|$registry:$BUILD_NUMBER|g' ./k8s/green-deployment.yaml
-      """
-     
-
+        sh """
+                sed -i 's|DOCKER|$registry:$BUILD_NUMBER|g' ./k8s/green-deployment.yaml
+              """
       }
-
     }
 
     stage('create kubecontext file') {
       steps {
-        withCredentials([aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-
+        withCredentials(bindings: [aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
           sh 'aws eks update-kubeconfig --region us-east-2 --name jenkins-cluster '
           sh 'kubectl get nodes'
-
         }
-      }
 
+      }
     }
 
-    stage("Make sure  that we have geen-namespace and blue-ns ") {
+    stage('Make sure  that we have geen-namespace and blue-ns ') {
       steps {
-        withCredentials([aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-
-          // check for namespaces blue and green
+        withCredentials(bindings: [aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
           sh 'bash ./bash-scripts/cheackForNameSpaces.sh'
-
         }
+
       }
     }
 
-    stage("Deploy blue deployment if not exsit ") {
+    stage('Deploy blue deployment if not exsit ') {
       steps {
-
-        withCredentials([aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-
-          // we do not want to destroy prodaction app but if that`s the first pipline deploy if anyway
+        withCredentials(bindings: [aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
           sh 'bash  ./bash-scripts/check-if-blue-is-exist-ordeploy-it-if-not.sh'
-
         }
+
       }
     }
 
-    stage("Deploy Green deployment if not exsit ") {
+    stage('Deploy Green deployment if not exsit ') {
       steps {
-
-        withCredentials([aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-
-          // update the greep app with new docker image
-          // deploymet
+        withCredentials(bindings: [aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
           sh '  kubectl  apply  -f ./k8s/green-deployment.yaml '
-          // service
           sh '  kubectl  apply  -f ./k8s/green-service.yaml '
-
         }
+
       }
     }
 
-    stage("Smoke Test") {
+    stage('Smoke Test') {
       steps {
-
-
-        withCredentials([aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+        withCredentials(bindings: [aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
           sh 'sleep 10'
           sh ' kubectl get service,pod --namespace=green-deployment --all-namespaces=true'
           sh ' bash ./bash-scripts/CheckForPodsGetReady.sh'
           sh 'bash ./bash-scripts/smokeTest.sh'
-
         }
+
       }
     }
 
@@ -163,22 +132,15 @@ pipeline {
       }
     }
 
-    stage("update blue app with new docker Image ") {
-
+    stage('update blue app with new docker Image ') {
       steps {
-
         sh """
-        sed -i 's|hossamalsankary/nodejs_app:49|$registry:$BUILD_NUMBER|g' ./k8s/green-deployment.yaml
+                sed -i 's|hossamalsankary/nodejs_app:49|$registry:$BUILD_NUMBER|g' ./k8s/green-deployment.yaml
 
-        """
-
-        withCredentials([aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-          // update the blue app with new docker image
-          // deploymet
+                """
+        withCredentials(bindings: [aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
           sh '  kubectl  apply  -f ./k8s/blue-deployment.yaml '
-          // service
           sh '  kubectl  apply  -f ./k8s/blue-service.yaml '
-
         }
 
       }
@@ -186,20 +148,23 @@ pipeline {
 
     stage('Destroy Green version') {
       steps {
-
-        withCredentials([aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-          // update the blue app with new docker image
+        withCredentials(bindings: [aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'aws', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
           sh 'bash ./bash-scripts/clear-green-deployment.sh'
-
         }
 
       }
     }
 
   }
+  environment {
+    registry = 'hossamalsankary/nodejs_app'
+    registryCredential = 'docker_credentials'
+    ANSIBLE_PRIVATE_KEY = credentials('secritfile')
+  }
   post {
     failure {
       sh 'bash ./bash-scripts/clearDockerImages.sh'
     }
+
   }
 }
